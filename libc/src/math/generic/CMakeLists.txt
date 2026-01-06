@@ -1594,6 +1594,7 @@ add_entrypoint_object(
     libc.src.__support.math.expxf16_utils
 )
 
+
 add_entrypoint_object(
   powf16
   SRCS
@@ -1601,19 +1602,8 @@ add_entrypoint_object(
   HDRS
     ../powf16.h
   DEPENDS
-    libc.hdr.errno_macros
-    libc.hdr.fenv_macros
-    libc.src.__support.CPP.bit
-    libc.src.__support.FPUtil.fenv_impl
-    libc.src.__support.FPUtil.fp_bits
-    libc.src.__support.FPUtil.polyeval
-    libc.src.__support.FPUtil.cast
-    libc.src.__support.FPUtil.multiply_add
-    libc.src.__support.FPUtil.nearest_integer
-    libc.src.__support.FPUtil.sqrt
-    libc.src.__support.macros.optimization
-    libc.src.__support.math.exp10f_utils
-    libc.src.__support.math.common_constants
+    libc.src.__support.math.powf16
+    libc.src.errno.errno
 )
 
 add_entrypoint_object(
