@@ -85,6 +85,7 @@
 #include "math/logbf128.h"
 #include "math/logbf16.h"
 #include "math/logf.h"
+#include "math/pow.h"
 #include "math/rsqrtf.h"
 #include "math/rsqrtf16.h"
 #include "math/sin.h"
