@@ -1356,7 +1356,8 @@ namespace {
       auto &V = TemplateArgsHashValue.emplace();
       for (auto &Level : TemplateArgs)
         for (auto &Arg : Level.Args)
-          Arg.Profile(V, SemaRef.Context);
+          SemaRef.Context.getCanonicalTemplateArgument(Arg).Profile(
+              V, SemaRef.Context);
     }
 
     /// Determine whether the given type \p T has already been
@@ -1622,9 +1623,11 @@ namespace {
           Cache && TemplateArgsHashValue) {
         llvm::FoldingSetNodeID ID = *TemplateArgsHashValue;
         ID.AddInteger(SemaRef.ArgPackSubstIndex.toInternalRepresentation());
-        // FIXME: We may have better performance if we profile Arg without
-        // sugars.
-        Arg.Profile(ID, SemaRef.Context);
+        // Profile without sugars: cheaper, and sugar-variant spellings of the
+        // same argument share one cache entry. (TypeLoc fidelity was already
+        // accepted as a trade-off for this cache, see below.)
+        SemaRef.Context.getCanonicalTemplateArgument(Arg).Profile(
+            ID, SemaRef.Context);
         // FIXME: Ideally, we should only cache and restore the TemplateArgument
         // and rebuild the uncached TypeLoc separately in place.
         // We choose to accept loss of TypeLoc fidelity in cases where TypeLocs
