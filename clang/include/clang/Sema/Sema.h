@@ -15112,6 +15112,14 @@ public:
   llvm::DenseMap<llvm::FoldingSetNodeID, TemplateArgumentLoc>
       *CurrentCachedTemplateArgs = nullptr;
 
+  /// Cache of concepts' normalized constraint trees, before parameter-mapping
+  /// substitution, keyed by (canonical concept, pack substitution index).
+  /// Normalization rebuilds the normal form of every referenced concept at
+  /// every use site; entries here are virgin trees that get deep-cloned per
+  /// use instead (see NormalizedConstraint::cloneTree).
+  llvm::DenseMap<std::pair<const NamedDecl *, unsigned>, NormalizedConstraint *>
+      ConceptNormalFormCache;
+
 private:
   /// Caches pairs of template-like decls whose associated constraints were
   /// checked for subsumption and whether or not the first's constraints did in

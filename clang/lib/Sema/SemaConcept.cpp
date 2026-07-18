@@ -2365,6 +2365,58 @@ bool SubstituteParameterMappings::substitute(NormalizedConstraint &N) {
 
 } // namespace
 
+NormalizedConstraint *
+NormalizedConstraint::cloneTree(ASTContext &C, const NormalizedConstraint &O) {
+  auto CopyMapping = [&C](const NormalizedConstraint &From,
+                          NormalizedConstraint &To) {
+    To.Atomic.Placeholder = From.Atomic.Placeholder;
+    if (!From.hasParameterMapping())
+      return;
+    llvm::MutableArrayRef<TemplateArgumentLoc> FromArgs =
+        From.getParameterMapping();
+    auto *Args = new (C) TemplateArgumentLoc[FromArgs.size()];
+    std::copy(FromArgs.begin(), FromArgs.end(), Args);
+    To.updateParameterMapping(From.Atomic.Indexes,
+                              From.Atomic.IndexesForSubsumption,
+                              llvm::MutableArrayRef(Args, FromArgs.size()),
+                              From.Atomic.ParamList);
+  };
+  switch (O.getKind()) {
+  case ConstraintKind::Compound: {
+    auto &CC = static_cast<const CompoundConstraint &>(O);
+    return CompoundConstraint::Create(C, cloneTree(C, CC.getLHS()),
+                                      CC.getCompoundKind(),
+                                      cloneTree(C, CC.getRHS()));
+  }
+  case ConstraintKind::Atomic: {
+    auto &A = static_cast<const AtomicConstraint &>(O);
+    auto *N = AtomicConstraint::Create(C, A.getConstraintExpr(),
+                                       A.getConstraintDecl(),
+                                       A.getPackSubstitutionIndex());
+    CopyMapping(O, *N);
+    return N;
+  }
+  case ConstraintKind::FoldExpanded: {
+    auto &F = static_cast<const FoldExpandedConstraint &>(O);
+    auto *N = FoldExpandedConstraint::Create(
+        C, F.getPattern(), F.getConstraintDecl(), F.getFoldOperator(),
+        cloneTree(C, F.getNormalizedPattern()));
+    CopyMapping(O, *N);
+    return N;
+  }
+  case ConstraintKind::ConceptId: {
+    auto &CI = static_cast<const ConceptIdConstraint &>(O);
+    auto *N = ConceptIdConstraint::Create(
+        C, CI.getConceptId(),
+        cloneTree(C, CI.getNormalizedConstraint()), CI.getConstraintDecl(),
+        CI.getConceptSpecializationExpr(), CI.getPackSubstitutionIndex());
+    CopyMapping(O, *N);
+    return N;
+  }
+  }
+  llvm_unreachable("Unknown ConstraintKind enum");
+}
+
 NormalizedConstraint *NormalizedConstraint::fromAssociatedConstraints(
     Sema &S, const NamedDecl *D, ArrayRef<AssociatedConstraint> ACs) {
   assert(ACs.size() != 0);
@@ -2426,16 +2478,38 @@ NormalizedConstraint *NormalizedConstraint::fromConstraintExpr(
     // expression, the program is ill-formed; no diagnostic is required.
     // [...]
     NormalizedConstraint *SubNF;
-    if (ExprResult Res =
-            SubstituteConceptsInConstraintExpression(S, D, CSE, SubstIndex);
-        Res.isUsable())
+    {
+      ExprResult Res =
+          SubstituteConceptsInConstraintExpression(S, D, CSE, SubstIndex);
+      if (!Res.isUsable())
+        return nullptr;
       // Use canonical declarations to merge ConceptDecls across different
       // modules.
-      SubNF = NormalizedConstraint::fromAssociatedConstraints(
-          S, CSE->getNamedConcept()->getCanonicalDecl(),
-          AssociatedConstraint(Res.get(), SubstIndex));
-    else
-      return nullptr;
+      const NamedDecl *CD = CSE->getNamedConcept()->getCanonicalDecl();
+      // The normal form of a concept-id is rebuilt at every use site because
+      // parameter mappings are substituted into the tree in place. When the
+      // constraint expression was not rewritten per-use, build the tree once,
+      // cache the virgin copy, and deep-clone it per use site instead.
+      bool Cacheable =
+          Res.get() == CSE->getNamedConcept()->getConstraintExpr();
+      std::pair<const NamedDecl *, unsigned> Key(
+          CD, SubstIndex.toInternalRepresentation());
+      NormalizedConstraint *Virgin = nullptr;
+      if (Cacheable) {
+        if (auto It = S.ConceptNormalFormCache.find(Key);
+            It != S.ConceptNormalFormCache.end())
+          Virgin = It->second;
+      }
+      if (!Virgin) {
+        Virgin = NormalizedConstraint::fromAssociatedConstraints(
+            S, CD, AssociatedConstraint(Res.get(), SubstIndex));
+        if (!Virgin)
+          return nullptr;
+        if (Cacheable)
+          S.ConceptNormalFormCache[Key] = Virgin;
+      }
+      SubNF = Cacheable ? cloneTree(S.getASTContext(), *Virgin) : Virgin;
+    }
     return ConceptIdConstraint::Create(S.getASTContext(),
                                        CSE->getConceptReference(), SubNF, D,
                                        CSE, SubstIndex);

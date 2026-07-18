@@ -278,6 +278,11 @@ public:
 
 private:
   friend class Sema;
+  /// Deep-copy a normalized constraint tree. Used to hand out per-use-site
+  /// copies of a concept's cached normal form: parameter mappings are written
+  /// into the tree in a later pass, so uses cannot share one tree.
+  static NormalizedConstraint *cloneTree(ASTContext &C,
+                                         const NormalizedConstraint &O);
   static NormalizedConstraint *
   fromAssociatedConstraints(Sema &S, const NamedDecl *D,
                             ArrayRef<AssociatedConstraint> ACs);
