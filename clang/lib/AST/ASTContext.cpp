@@ -11882,10 +11882,11 @@ QualType ASTContext::mergeTypes(QualType LHS, QualType RHS, bool OfBlockPointer,
   if (LHSRefTy || RHSRefTy)
     return {};
 
-  if (std::optional<QualType> MergedOBT =
-          tryMergeOverflowBehaviorTypes(LHS, RHS, OfBlockPointer, Unqualified,
-                                        BlockReturnType, IsConditionalOperator))
-    return *MergedOBT;
+  if (LangOpts.OverflowBehaviorTypes)
+    if (std::optional<QualType> MergedOBT =
+            tryMergeOverflowBehaviorTypes(LHS, RHS, OfBlockPointer, Unqualified,
+                                          BlockReturnType, IsConditionalOperator))
+      return *MergedOBT;
 
   if (Unqualified) {
     LHS = LHS.getUnqualifiedType();
