@@ -645,8 +645,23 @@ bool DiagnosticIDs::shouldSuppressAsSystemWarning(
   bool IsCustomDiag = DiagnosticIDs::IsCustomDiag(DiagID);
   const auto &SM = Diag.getSourceManager();
 
+  // Whether Loc is in a system header depends only on the location, not on the
+  // diagnostic. The same location is queried repeatedly on this hot path (every
+  // diagnostic in a warning group is checked at one location), so reuse the
+  // last classification instead of re-resolving the expansion FileID via
+  // SourceManager each time. This is the cost #141950 made unconditional.
+  bool InSystemHeader;
+  if (Diag.LastSystemHeaderLocValid && Diag.LastSystemHeaderLoc == Loc) {
+    InSystemHeader = Diag.LastSystemHeaderResult;
+  } else {
+    InSystemHeader = SM.isInSystemHeader(SM.getExpansionLoc(Loc));
+    Diag.LastSystemHeaderLoc = Loc;
+    Diag.LastSystemHeaderResult = InSystemHeader;
+    Diag.LastSystemHeaderLocValid = true;
+  }
+
   // If we are in a system header, we ignore it.
-  if (SM.isInSystemHeader(SM.getExpansionLoc(Loc))) {
+  if (InSystemHeader) {
     bool ShowInSystemHeader = true;
     if (IsCustomDiag)
       ShowInSystemHeader =

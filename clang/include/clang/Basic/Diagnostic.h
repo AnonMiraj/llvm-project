@@ -528,6 +528,18 @@ private:
                      : DiagStatesByLoc.getCurDiagState();
   }
 
+  /// One-entry memo for DiagnosticIDs::shouldSuppressAsSystemWarning's
+  /// in-system-header classification. That classification is a function of the
+  /// location alone (not the diagnostic ID), and the same location is queried
+  /// repeatedly on the diagnostic hot path (e.g. every diagnostic in a warning
+  /// group is checked at one location), so caching the last classified location
+  /// avoids re-resolving the expansion FileID via SourceManager each time.
+  /// Reset whenever the SourceManager changes (raw locations are not comparable
+  /// across SourceManagers).
+  mutable SourceLocation LastSystemHeaderLoc;
+  mutable bool LastSystemHeaderLocValid = false;
+  mutable bool LastSystemHeaderResult = false;
+
   /// Sticky flag set to \c true when an error is emitted.
   bool ErrorOccurred;
 
@@ -631,6 +643,8 @@ public:
     assert(DiagStatesByLoc.empty() &&
            "Leftover diag state from a different SourceManager.");
     SourceMgr = SrcMgr;
+    // Raw source locations are not comparable across SourceManagers.
+    LastSystemHeaderLocValid = false;
   }
 
   //===--------------------------------------------------------------------===//
