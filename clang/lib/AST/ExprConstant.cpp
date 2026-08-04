@@ -1006,6 +1006,23 @@ namespace {
       return true;
     }
 
+    /// Deduct \p Count steps from the remaining step budget, diagnosing at
+    /// \p E if the budget is exhausted. This accounts for operations whose
+    /// cost is proportional to an element count rather than to the number of
+    /// statements evaluated, such as dynamic array allocation.
+    bool nextSteps(uint64_t Count, const Expr *E, bool Diag = true) {
+      if (getLangOpts().ConstexprStepLimit == 0)
+        return true;
+      if (StepsLeft < Count) {
+        StepsLeft = 0;
+        if (Diag)
+          FFDiag(E->getExprLoc(), diag::note_constexpr_step_limit_exceeded);
+        return false;
+      }
+      StepsLeft -= Count;
+      return true;
+    }
+
     APValue *createHeapAlloc(const Expr *E, QualType T, LValue &LV);
 
     std::optional<DynAlloc *> lookupDynamicAlloc(DynamicAllocLValue DA) {
@@ -7330,6 +7347,28 @@ static bool HandleDestructionImpl(EvalInfo &Info, SourceRange CallRange,
     if (!CheckArraySize(Info, CAT, CallRange.getBegin()))
       return false;
 
+    // Fast path: for elements with trivial destruction, destroying each
+    // element in turn would only check that it is within its lifetime and
+    // then end it. Avoid materializing the array filler and walking all
+    // Size elements; check the initialized elements and the filler once
+    // instead. This makes the teardown of e.g. new char[1024*1024]
+    // O(#initialized elements) rather than O(size) (GH#151451).
+    if (!ElemT->isArrayType() && !ElemT->isRecordType() &&
+        !ElemT.isDestructedType()) {
+      bool AllWithinLifetime =
+          !Value.hasArrayFiller() || !Value.getArrayFiller().isAbsent();
+      for (unsigned I = Value.getArrayInitializedElts();
+           AllWithinLifetime && I != 0; --I)
+        AllWithinLifetime = !Value.getArrayInitializedElt(I - 1).isAbsent();
+      if (AllWithinLifetime) {
+        // End the lifetime of this array now.
+        Value = APValue();
+        return true;
+      }
+      // Otherwise fall through to the element-by-element walk, which will
+      // diagnose the out-of-lifetime element at the right index.
+    }
+
     LValue ElemLV = This;
     ElemLV.addArray(Info, &LocE, CAT);
     if (!HandleLValueArrayAdjustment(Info, &LocE, ElemLV, ElemT, Size))
@@ -10821,6 +10860,17 @@ bool PointerExprEvaluator::VisitCXXNewExpr(const CXXNewExpr *E) {
                              ConstantArrayType::getNumAddressingBits(
                                  Info.Ctx, AllocType, ArrayBound),
                              ArrayBound.getZExtValue(), /*Diag=*/!IsNothrow)) {
+      if (IsNothrow)
+        return ZeroInitialization(E);
+      return false;
+    }
+
+    // Materializing the allocation (and eventually tearing it down) costs
+    // work proportional to the element count; charge it against the step
+    // budget so that evaluation of code that repeatedly allocates large
+    // arrays fails fast instead of doing unbounded work that the step limit
+    // never observes (GH#151451).
+    if (!Info.nextSteps(ArrayBound.getZExtValue(), E, /*Diag=*/!IsNothrow)) {
       if (IsNothrow)
         return ZeroInitialization(E);
       return false;
