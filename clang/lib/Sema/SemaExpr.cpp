@@ -1832,22 +1832,62 @@ ExprResult Sema::ActOnGenericSelectionExpr(
 // and not valid.
 static bool areTypesCompatibleForGeneric(ASTContext &Ctx, QualType T,
                                          QualType U) {
-  // Try to handle special types like OverflowBehaviorTypes
-  const auto *TOBT = T->getAs<OverflowBehaviorType>();
-  const auto *UOBT = U.getCanonicalType()->getAs<OverflowBehaviorType>();
+  // Try to handle special types like OverflowBehaviorTypes. These can only
+  // occur when the feature is enabled; don't pay for the sugar walks
+  // otherwise.
+  if (Ctx.getLangOpts().OverflowBehaviorTypes) {
+    const auto *TOBT = T->getAs<OverflowBehaviorType>();
+    const auto *UOBT = U.getCanonicalType()->getAs<OverflowBehaviorType>();
 
-  if (TOBT || UOBT) {
-    if (TOBT && UOBT) {
-      if (TOBT->getBehaviorKind() == UOBT->getBehaviorKind())
-        return Ctx.typesAreCompatible(TOBT->getUnderlyingType(),
-                                      UOBT->getUnderlyingType());
+    if (TOBT || UOBT) {
+      if (TOBT && UOBT) {
+        if (TOBT->getBehaviorKind() == UOBT->getBehaviorKind())
+          return Ctx.typesAreCompatible(TOBT->getUnderlyingType(),
+                                        UOBT->getUnderlyingType());
+        return false;
+      }
       return false;
     }
-    return false;
   }
 
   // We're dealing with types that don't require special handling.
   return Ctx.typesAreCompatible(T, U);
+}
+
+// Fast, conservative pre-filter to avoid the expensive type compatibility
+// machinery (areTypesCompatibleForGeneric -> ASTContext::mergeTypes) for
+// association types that manifestly cannot be compatible. \p A and \p B must
+// be canonical. Returns true only when the types are provably incompatible:
+// two *distinct* canonical builtin types (possibly behind matching chains of
+// identically-qualified pointers) are never compatible in C or C++. Anything
+// that can be cross-compatible while canonically distinct (enum vs integer,
+// arrays of unknown vs known bound, function types, _Atomic, __auto_type,
+// OverflowBehaviorType, ObjC pointers, ...) has a non-builtin canonical type
+// node and falls back to the full check. Any qualifier mismatch on a pointer
+// level conservatively falls back to the full check as well.
+static bool isObviouslyIncompatible(QualType A, QualType B) {
+  assert(A.isCanonical() && B.isCanonical());
+  while (true) {
+    if (A == B)
+      return false; // Possibly compatible; defer to the full check.
+
+    const auto *AP = dyn_cast<PointerType>(A);
+    const auto *BP = dyn_cast<PointerType>(B);
+    if (AP && BP && A.getLocalQualifiers() == B.getLocalQualifiers()) {
+      A = AP->getPointeeType();
+      B = BP->getPointeeType();
+      continue;
+    }
+
+    // Two distinct canonical builtin types are never compatible, and a
+    // builtin type is never compatible with a pointer type: the only
+    // cross-class compatibilities in C (enum vs integer, __auto_type vs
+    // anything, ObjC id vs block pointer) involve canonical type nodes that
+    // are neither BuiltinType nor PointerType.
+    bool ABuiltin = isa<BuiltinType>(A.getTypePtr());
+    bool BBuiltin = isa<BuiltinType>(B.getTypePtr());
+    return (ABuiltin && BBuiltin) || (ABuiltin && BP) || (AP && BBuiltin);
+  }
 }
 
 ExprResult Sema::CreateGenericSelectionExpr(
@@ -1894,6 +1934,14 @@ ExprResult Sema::CreateGenericSelectionExpr(
       ControllingExpr->HasSideEffects(Context, false))
     Diag(ControllingExpr->getExprLoc(),
          diag::warn_side_effects_unevaluated_context);
+
+  // Precompute the canonical type of each association so the quadratic
+  // compatibility checks below can cheaply rule out provably-incompatible
+  // pairs without going through ASTContext::mergeTypes each time.
+  SmallVector<QualType, 16> CanonTypes(NumAssocs);
+  for (unsigned i = 0; i < NumAssocs; ++i)
+    if (Types[i])
+      CanonTypes[i] = Types[i]->getType().getCanonicalType();
 
   for (unsigned i = 0; i < NumAssocs; ++i) {
     if (Exprs[i]->containsUnexpandedParameterPack())
@@ -1974,6 +2022,7 @@ ExprResult Sema::CreateGenericSelectionExpr(
         // selection shall specify compatible types."
         for (unsigned j = i+1; j < NumAssocs; ++j)
           if (Types[j] && !Types[j]->getType()->isDependentType() &&
+              !isObviouslyIncompatible(CanonTypes[i], CanonTypes[j]) &&
               areTypesCompatibleForGeneric(Context, Types[i]->getType(),
                                            Types[j]->getType())) {
             Diag(Types[j]->getTypeLoc().getBeginLoc(),
@@ -2010,17 +2059,18 @@ ExprResult Sema::CreateGenericSelectionExpr(
   // Look at the canonical type of the controlling expression in case it was a
   // deduced type like __auto_type. However, when issuing diagnostics, use the
   // type the user wrote in source rather than the canonical one.
+  QualType ControllingQT =
+      ControllingExpr ? ControllingExpr->getType().getCanonicalType()
+                      : ControllingType->getType().getCanonicalType();
   for (unsigned i = 0; i < NumAssocs; ++i) {
     if (!Types[i])
       DefaultIndex = i;
     else {
       bool Compatible;
-      QualType ControllingQT =
-          ControllingExpr ? ControllingExpr->getType().getCanonicalType()
-                          : ControllingType->getType().getCanonicalType();
       QualType AssocQT = Types[i]->getType();
 
       Compatible =
+          !isObviouslyIncompatible(ControllingQT, CanonTypes[i]) &&
           areTypesCompatibleForGeneric(Context, ControllingQT, AssocQT);
 
       if (Compatible)

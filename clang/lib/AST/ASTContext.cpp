@@ -11823,6 +11823,11 @@ QualType ASTContext::mergeTagDefinitions(QualType LHS, QualType RHS) {
 std::optional<QualType> ASTContext::tryMergeOverflowBehaviorTypes(
     QualType LHS, QualType RHS, bool OfBlockPointer, bool Unqualified,
     bool BlockReturnType, bool IsConditionalOperator) {
+  // No OverflowBehaviorType can exist unless the feature is enabled; skip the
+  // sugar walks below in that (common) case.
+  if (!getLangOpts().OverflowBehaviorTypes)
+    return std::nullopt;
+
   const auto *LHSOBT = LHS->getAs<OverflowBehaviorType>();
   const auto *RHSOBT = RHS->getAs<OverflowBehaviorType>();
 
@@ -11898,6 +11903,15 @@ QualType ASTContext::mergeTypes(QualType LHS, QualType RHS, bool OfBlockPointer,
   // If two types are identical, they are compatible.
   if (LHSCan == RHSCan)
     return LHS;
+
+  // Two distinct canonical builtin types never merge: the qualifier logic
+  // below cannot make them compatible (a builtin type is not an ObjC object
+  // pointer), the type classes match so the class-mismatch handling (enums,
+  // __auto_type, block pointers) does not apply, and the Type::Builtin case
+  // in the switch below returns failure. Fast-path this common case.
+  if (isa<BuiltinType>(LHSCan.getTypePtr()) &&
+      isa<BuiltinType>(RHSCan.getTypePtr()))
+    return {};
 
   // If the qualifiers are different, the types aren't compatible... mostly.
   Qualifiers LQuals = LHSCan.getLocalQualifiers();
@@ -11975,13 +11989,18 @@ QualType ASTContext::mergeTypes(QualType LHS, QualType RHS, bool OfBlockPointer,
         return RHS;
     }
     // Allow __auto_type to match anything; it merges to the type with more
-    // information.
-    if (const auto *AT = LHS->getAs<AutoType>()) {
-      if (!AT->isDeduced() && AT->isGNUAutoType())
+    // information. Only an undeduced AutoType can take this path (a deduced
+    // AutoType is sugar for its deduced type), and an undeduced AutoType is
+    // canonical, so only walk the sugar when the canonical type class says an
+    // AutoType may be found.
+    if (LHSClass == Type::Auto) {
+      if (const auto *AT = LHS->getAs<AutoType>();
+          AT && !AT->isDeduced() && AT->isGNUAutoType())
         return RHS;
     }
-    if (const auto *AT = RHS->getAs<AutoType>()) {
-      if (!AT->isDeduced() && AT->isGNUAutoType())
+    if (RHSClass == Type::Auto) {
+      if (const auto *AT = RHS->getAs<AutoType>();
+          AT && !AT->isDeduced() && AT->isGNUAutoType())
         return LHS;
     }
     return {};
