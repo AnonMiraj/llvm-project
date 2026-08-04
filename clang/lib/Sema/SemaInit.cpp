@@ -363,6 +363,16 @@ class InitListChecker {
   SmallVectorImpl<QualType> *AggrDeductionCandidateParamTypes = nullptr;
   EmbedExpr *CurEmbed = nullptr; // Save current embed we're processing.
   unsigned CurEmbedIndex = 0;
+  /// Cache of the index (in declaration order, ignoring unnamed bitfields)
+  /// of each field of a record, used to avoid a linear scan per designator
+  /// in CheckDesignatedInitializer (quadratic for large records with many
+  /// designated initializers). Keyed by the field's canonical declaration;
+  /// the mapped value holds the field declaration found in the record's
+  /// field list and its index.
+  llvm::DenseMap<const RecordDecl *,
+                 llvm::DenseMap<const FieldDecl *,
+                                std::pair<FieldDecl *, unsigned>>>
+      DesignatorFieldIndex;
 
   NoInitExpr *getDummyInit() {
     if (!DummyExpr)
@@ -3012,14 +3022,26 @@ InitListChecker::CheckDesignatedInitializer(const InitializedEntity &Entity,
 
     unsigned FieldIndex = NumBases;
 
-    for (auto *FI : RD->fields()) {
-      if (FI->isUnnamedBitField())
-        continue;
-      if (declaresSameEntity(KnownField, FI)) {
-        KnownField = FI;
-        break;
+    // Locate KnownField in the record's field list and compute its index,
+    // using a lazily-built per-record map to avoid a linear scan for each
+    // designator (which would be quadratic in the number of fields).
+    auto &FIMap = DesignatorFieldIndex[RD];
+    if (FIMap.empty()) {
+      unsigned Idx = 0;
+      for (auto *FI : RD->fields()) {
+        if (FI->isUnnamedBitField())
+          continue;
+        FIMap.try_emplace(FI->getCanonicalDecl(), FI, Idx++);
       }
-      ++FieldIndex;
+    }
+    if (auto It = FIMap.find(KnownField->getCanonicalDecl());
+        It != FIMap.end()) {
+      KnownField = It->second.first;
+      FieldIndex += It->second.second;
+    } else {
+      // Not found: as in the linear scan, leave KnownField unchanged and
+      // point FieldIndex one past the last named field.
+      FieldIndex += FIMap.size();
     }
 
     RecordDecl::field_iterator Field =
