@@ -126,6 +126,11 @@ public:
   /// idiom 'int x = x'.  All other uses of 'x' within the initializer
   /// are handled by handleUseOfUninitVariable.
   virtual void handleSelfInit(const VarDecl *vd) {}
+
+  /// Whether this handler needs the fully classified UninitUse. Return false
+  /// to let the analysis skip the expensive CFG walk that classifies the use
+  /// and computes its branches.
+  virtual bool needsFullUninitUse() const { return true; }
 };
 
 struct UninitVariablesAnalysisStats {

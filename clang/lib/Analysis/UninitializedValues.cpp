@@ -663,25 +663,44 @@ public:
 
 void TransferFunctions::reportUse(const Expr *ex, const VarDecl *vd) {
   Value v = vals[vd];
-  if (isUninitialized(v))
-    handler.handleUseOfUninitVariable(vd, getUninitUse(ex, vd, v));
+  if (isUninitialized(v)) {
+    // getUninitUse walks the CFG; skip it for handlers that don't need the
+    // full classification (e.g. the pruning pass, which runs on every block
+    // visit and only records that a use exists).
+    if (handler.needsFullUninitUse())
+      handler.handleUseOfUninitVariable(vd, getUninitUse(ex, vd, v));
+    else
+      handler.handleUseOfUninitVariable(vd, UninitUse(ex, isAlwaysUninit(v)));
+  }
 }
 
 void TransferFunctions::reportConstRefUse(const Expr *ex, const VarDecl *vd) {
   Value v = vals[vd];
   if (isAlwaysUninit(v)) {
-    auto use = getUninitUse(ex, vd, v);
-    use.setConstRefUse();
-    handler.handleUseOfUninitVariable(vd, use);
+    if (handler.needsFullUninitUse()) {
+      auto use = getUninitUse(ex, vd, v);
+      use.setConstRefUse();
+      handler.handleUseOfUninitVariable(vd, use);
+    } else {
+      UninitUse use(ex, /*AlwaysUninit=*/true);
+      use.setConstRefUse();
+      handler.handleUseOfUninitVariable(vd, use);
+    }
   }
 }
 
 void TransferFunctions::reportConstPtrUse(const Expr *ex, const VarDecl *vd) {
   Value v = vals[vd];
   if (isAlwaysUninit(v)) {
-    auto use = getUninitUse(ex, vd, v);
-    use.setConstPtrUse();
-    handler.handleUseOfUninitVariable(vd, use);
+    if (handler.needsFullUninitUse()) {
+      auto use = getUninitUse(ex, vd, v);
+      use.setConstPtrUse();
+      handler.handleUseOfUninitVariable(vd, use);
+    } else {
+      UninitUse use(ex, /*AlwaysUninit=*/true);
+      use.setConstPtrUse();
+      handler.handleUseOfUninitVariable(vd, use);
+    }
   }
 }
 
@@ -909,6 +928,9 @@ struct PruneBlocksHandler : public UninitVariablesHandler {
     hadUse[currentBlock] = true;
     hadAnyUse = true;
   }
+
+  /// This handler ignores the UninitUse details, so skip computing them.
+  bool needsFullUninitUse() const override { return false; }
 };
 
 } // namespace
