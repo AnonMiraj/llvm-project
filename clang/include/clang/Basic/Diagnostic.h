@@ -589,6 +589,12 @@ public:
     return GetDiagStateForLoc(Loc);
   }
 
+  /// Returns whether \p Loc is in a system header and/or a system macro, as a
+  /// value in [0, 4). Severity depends on this through
+  /// DiagnosticIDs::shouldSuppressAsSystemWarning(), so a cache keyed on
+  /// getDiagStateKeyForLoc() must take it into account as well.
+  unsigned getDiagStateSystemClassForLoc(SourceLocation Loc) const;
+
   /// True if an active diagnostic suppression mapping makes severity dependent
   /// on the file path.
   bool hasDiagSuppressionMapping() const {
@@ -1148,6 +1154,23 @@ public:
     Diag.setIgnoreAllWarnings(true);
   }
   ~IgnoreAllWarningDiagRAII() { Diag.setIgnoreAllWarnings(OldValue); }
+};
+
+/// RAII class that temporarily forces warnings in system headers and system
+/// macros to be shown on a DiagnosticsEngine and restores the previous state on
+/// destruction.  Use it to ask what a diagnostic's severity would be if the
+/// location were not in a system header.
+class ForceSystemWarningsRAII {
+  DiagnosticsEngine &Diag;
+  bool OldValue;
+
+public:
+  explicit ForceSystemWarningsRAII(DiagnosticsEngine &Diag, bool Force = true)
+      : Diag(Diag), OldValue(Diag.getForceSystemWarnings()) {
+    if (Force)
+      Diag.setForceSystemWarnings(true);
+  }
+  ~ForceSystemWarningsRAII() { Diag.setForceSystemWarnings(OldValue); }
 };
 
 /// The streaming interface shared between DiagnosticBuilder and

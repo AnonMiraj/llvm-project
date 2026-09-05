@@ -596,6 +596,13 @@ bool WarningsSpecialCaseList::isDiagSuppressed(diag::kind DiagId,
   return LastSup > LastEmit;
 }
 
+unsigned
+DiagnosticsEngine::getDiagStateSystemClassForLoc(SourceLocation Loc) const {
+  const SourceManager &SM = getSourceManager();
+  return (SM.isInSystemHeader(SM.getExpansionLoc(Loc)) ? 2u : 0u) |
+         (SM.isInSystemMacro(Loc) ? 1u : 0u);
+}
+
 bool DiagnosticsEngine::isSuppressedViaMapping(diag::kind DiagId,
                                                SourceLocation DiagLoc) const {
   if (!hasSourceManager() || !DiagSuppressionMapping)
