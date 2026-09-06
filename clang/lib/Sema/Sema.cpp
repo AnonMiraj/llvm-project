@@ -227,9 +227,10 @@ public:
   }
   void PragmaDiagnostic(SourceLocation Loc, StringRef Namespace,
                         diag::Severity Mapping, StringRef Str) override {
-    // The pragma changed diagnostic severities; drop any cached analysis
-    // warning policies derived from the previous state.
+    // The pragma changed diagnostic severities; drop any cached state
+    // derived from the previous one.
     S->AnalysisWarnings.clearPolicyCache();
+    S->clearDocumentationDiagsCache();
 
     // If one of the analysis-based diagnostics was enabled while processing
     // a function, we want to note it in the analysis-based warnings so they
@@ -2749,7 +2750,7 @@ LambdaScopeInfo *Sema::getCurGenericLambda() {
   return nullptr;
 }
 
-bool Sema::shouldRetainCommentsInAST(SourceLocation Loc) const {
+bool Sema::shouldRetainCommentsInAST(SourceLocation Loc) {
   if (!LangOpts.CommentOpts.RetainCommentsFromSystemHeaders &&
       SourceMgr.isInSystemHeader(Loc))
     return false;
@@ -2769,15 +2770,55 @@ bool Sema::shouldRetainCommentsInAST(SourceLocation Loc) const {
   if (PP.isCodeCompletionEnabled())
     return true;
 
-  // Keep the comment if any of the -Wdocumentation warnings is enabled at
-  // its location (checking the location handles warnings turned on by
-  // `#pragma clang diagnostic`). -Wdocumentation-pedantic is checked
-  // separately because it is not a subgroup of -Wdocumentation.
-  if (!Diags.areAllIgnored("documentation", Loc) ||
-      !Diags.areAllIgnored("documentation-pedantic", Loc))
+  // Keep the comment if a documentation warning is enabled at its location.
+  // Checking the location, rather than globally, is what makes a warning
+  // turned on by a `#pragma clang diagnostic` take effect.
+  return areDocumentationDiagsEnabled(Loc);
+}
+
+bool Sema::computeDocumentationDiagsAt(SourceLocation Loc) const {
+  return !Diags.areAllIgnored("documentation", Loc) ||
+         !Diags.areAllIgnored("documentation-pedantic", Loc);
+}
+
+void Sema::clearDocumentationDiagsCache() {
+  DocDiagsStateKey = nullptr;
+  DocDiagsExactComputed = 0;
+}
+
+bool Sema::areDocumentationDiagsEnabled(SourceLocation Loc) {
+  // Under a suppression mapping the severity depends on the file path rather
+  // than the diagnostic state, so there is nothing stable to key a cache on.
+  if (Loc.isInvalid() || Diags.hasDiagSuppressionMapping())
+    return computeDocumentationDiagsAt(Loc);
+
+  const void *StateKey = Diags.getDiagStateKeyForLoc(Loc);
+  if (StateKey != DocDiagsStateKey) {
+    DocDiagsStateKey = StateKey;
+    {
+      // Answer as if Loc were not in a system header.
+      ForceSystemWarningsRAII ShowSystemWarnings(Diags);
+      DocDiagsEnabledIgnoringSystem = computeDocumentationDiagsAt(Loc);
+    }
+    DocDiagsExactComputed = 0;
+  }
+
+  if (!DocDiagsEnabledIgnoringSystem)
+    return false;
+
+  unsigned SysIdx = Diags.getDiagStateSystemClassForLoc(Loc);
+  if (SysIdx == 0)
     return true;
 
-  return false;
+  const unsigned Bit = 1u << SysIdx;
+  if (!(DocDiagsExactComputed & Bit)) {
+    DocDiagsExactComputed |= Bit;
+    if (computeDocumentationDiagsAt(Loc))
+      DocDiagsExactEnabled |= Bit;
+    else
+      DocDiagsExactEnabled &= ~Bit;
+  }
+  return (DocDiagsExactEnabled & Bit) != 0;
 }
 
 void Sema::ActOnComment(SourceRange Comment) {
