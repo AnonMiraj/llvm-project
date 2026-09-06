@@ -1149,7 +1149,6 @@ private:
   uint8_t DocDiagsExactEnabled = 0;
 
 public:
-
   /// Returns true if a comment at \p Loc should be retained in the AST
   /// (some consumer such as -Wdocumentation, -fparse-all-comments, code
   /// completion, or AST-file serialization may read it back).
