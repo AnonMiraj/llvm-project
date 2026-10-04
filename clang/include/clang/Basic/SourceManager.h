@@ -1480,6 +1480,12 @@ public:
   PresumedLoc getPresumedLoc(SourceLocation Loc,
                              bool UseLineDirectives = true) const;
 
+  /// Returns getPresumedLoc(Loc, UseLineDirectives).getFilename() without
+  /// computing the line and column, which can require building the line table
+  /// of the whole file. Returns null if the presumed location is invalid.
+  const char *getPresumedFilename(SourceLocation Loc,
+                                  bool UseLineDirectives = true) const;
+
   /// Returns whether the PresumedLoc for a given SourceLocation is
   /// in the main file.
   ///
@@ -1507,46 +1513,34 @@ public:
 
   /// Returns whether \p Loc is located in a <built-in> file.
   bool isWrittenInBuiltinFile(SourceLocation Loc) const {
-    PresumedLoc Presumed = getPresumedLoc(Loc);
-    if (Presumed.isInvalid())
-      return false;
-    StringRef Filename(Presumed.getFilename());
-    return Filename == "<built-in>";
+    const char *Filename = getPresumedFilename(Loc);
+    return Filename && StringRef(Filename) == "<built-in>";
   }
 
   /// Returns whether \p Loc is located in a <command line> file.
   bool isWrittenInCommandLineFile(SourceLocation Loc) const {
-    PresumedLoc Presumed = getPresumedLoc(Loc);
-    if (Presumed.isInvalid())
-      return false;
-    StringRef Filename(Presumed.getFilename());
-    return Filename == "<command line>";
+    const char *Filename = getPresumedFilename(Loc);
+    return Filename && StringRef(Filename) == "<command line>";
   }
 
   /// Returns whether \p Loc is located in a <scratch space> file.
   bool isWrittenInScratchSpace(SourceLocation Loc) const {
-    PresumedLoc Presumed = getPresumedLoc(Loc);
-    if (Presumed.isInvalid())
-      return false;
-    StringRef Filename(Presumed.getFilename());
-    return Filename == "<scratch space>";
+    const char *Filename = getPresumedFilename(Loc);
+    return Filename && StringRef(Filename) == "<scratch space>";
   }
 
   /// Returns whether \p Loc is located in a <module-includes> file.
   bool isWrittenInModuleIncludes(SourceLocation Loc) const {
-    PresumedLoc Presumed = getPresumedLoc(Loc);
-    if (Presumed.isInvalid())
-      return false;
-    StringRef Filename(Presumed.getFilename());
-    return Filename == "<module-includes>";
+    const char *Filename = getPresumedFilename(Loc);
+    return Filename && StringRef(Filename) == "<module-includes>";
   }
 
   /// Returns whether \p Loc is located in a built-in or command line source.
   bool isInPredefinedFile(SourceLocation Loc) const {
-    PresumedLoc Presumed = getPresumedLoc(Loc);
-    if (Presumed.isInvalid())
+    const char *Presumed = getPresumedFilename(Loc);
+    if (!Presumed)
       return false;
-    StringRef Filename(Presumed.getFilename());
+    StringRef Filename(Presumed);
     return Filename == "<built-in>" || Filename == "<command line>";
   }
 

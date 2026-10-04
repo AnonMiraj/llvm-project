@@ -1527,6 +1527,42 @@ PresumedLoc SourceManager::getPresumedLoc(SourceLocation Loc,
   return PresumedLoc(Filename.data(), FID, LineNo, ColNo, IncludeLoc);
 }
 
+const char *SourceManager::getPresumedFilename(SourceLocation Loc,
+                                               bool UseLineDirectives) const {
+  if (Loc.isInvalid())
+    return nullptr;
+
+  // Presumed locations are always for expansion points.
+  FileIDAndOffset LocInfo = getDecomposedExpansionLoc(Loc);
+
+  bool Invalid = false;
+  const SLocEntry &Entry = getSLocEntry(LocInfo.first, &Invalid);
+  if (Invalid || !Entry.isFile())
+    return nullptr;
+
+  const SrcMgr::FileInfo &FI = Entry.getFile();
+  const SrcMgr::ContentCache *C = &FI.getContentCache();
+
+  // getPresumedLoc() fails if the buffer is unavailable or the offset is past
+  // its end; match that.
+  std::optional<llvm::MemoryBufferRef> Buffer =
+      C->getBufferOrNone(Diag, getFileManager());
+  if (!Buffer || LocInfo.second > Buffer->getBufferSize())
+    return nullptr;
+
+  StringRef Filename =
+      C->OrigEntry ? C->OrigEntry->getName() : Buffer->getBufferIdentifier();
+
+  if (UseLineDirectives && FI.hasLineDirectives()) {
+    assert(LineTable && "Can't have linetable entries without a LineTable!");
+    if (const LineEntry *Entry =
+            LineTable->FindNearestLineEntry(LocInfo.first, LocInfo.second))
+      if (Entry->FilenameID != -1)
+        Filename = LineTable->getFilename(Entry->FilenameID);
+  }
+  return Filename.data();
+}
+
 /// Returns whether the PresumedLoc for a given SourceLocation is
 /// in the main file.
 ///
