@@ -1036,10 +1036,9 @@ private:
   /// Tests whether this instruction is a spill to a stack location.
   bool isSpillInstruction(const MachineInstr &MI, MachineFunction *MF);
 
-  /// Decide if @MI is a spill instruction and return true if it is. We use 2
-  /// criteria to make this decision:
-  /// - Is this instruction a store to a spill slot?
-  /// - Is there a register operand that is both used and killed?
+  /// Decide if @MI, which isSpillInstruction() has accepted as a store to a
+  /// spill slot, spills a variable location: is there a register operand that
+  /// is both used and killed?
   /// TODO: Store optimization can fold spills into other stores (including
   /// other spills). We do not handle this yet (more than one memory operand).
   bool isLocationSpill(const MachineInstr &MI, MachineFunction *MF,
@@ -1722,8 +1721,7 @@ bool VarLocBasedLDV::isSpillInstruction(const MachineInstr &MI,
 
 bool VarLocBasedLDV::isLocationSpill(const MachineInstr &MI,
                                       MachineFunction *MF, Register &Reg) {
-  if (!isSpillInstruction(MI, MF))
-    return false;
+  assert(isSpillInstruction(MI, MF) && "Expected a spill instruction");
 
   auto isKilledReg = [&](const MachineOperand MO, Register &Reg) {
     if (!MO.isReg() || !MO.isUse()) {
@@ -1797,7 +1795,8 @@ void VarLocBasedLDV::transferSpillOrRestoreInst(MachineInstr &MI,
   // written to, then close the variable location. The value in memory
   // will have changed.
   VarLocsInRange KillSet;
-  if (isSpillInstruction(MI, MF)) {
+  bool IsSpill = isSpillInstruction(MI, MF);
+  if (IsSpill) {
     Loc = extractSpillBaseRegAndOffset(MI);
     for (uint64_t ID : OpenRanges.getSpillVarLocs()) {
       LocIndex Idx = LocIndex::fromRawInteger(ID);
@@ -1827,7 +1826,7 @@ void VarLocBasedLDV::transferSpillOrRestoreInst(MachineInstr &MI,
 
   // Try to recognise spill and restore instructions that may create a new
   // variable location.
-  if (isLocationSpill(MI, MF, Reg)) {
+  if (IsSpill && isLocationSpill(MI, MF, Reg)) {
     TKind = TransferKind::TransferSpill;
     LLVM_DEBUG(dbgs() << "Recognized as spill: "; MI.dump(););
     LLVM_DEBUG(dbgs() << "Register: " << Reg.id() << " " << printReg(Reg, TRI)
